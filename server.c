@@ -6,6 +6,20 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/wait.h>
+#include <sys/sem.h>
+
+typedef union{
+    int val; /* Value for SETVAL */
+    struct semid_ds *buf; /* Buffer for IPC_STAT, IPC_SET */
+    unsigned short *array; /* Array for GETALL, SETALL */
+    struct seminfo *__buf; /* Buffer for IPC_INFO
+                                           (Linux-specific) */
+}semun;
+
 void sigctrl(int param);
 void sigctrl1(int param);
 void sigpipe(int param);
@@ -19,6 +33,10 @@ char zap = 1;
 int sem_id;
 int poc_klientov=0;
 int sockFileDesc;
+float *teplota;
+void *shared_memory;
+int shmid;
+struct sembuf my;
 int main(int argc,char *argv[]){
     struct sockaddr_in adresa,pripojilSa;
     int port;
@@ -41,13 +59,29 @@ int main(int argc,char *argv[]){
     if(bind(sockFileDesc, (struct sockaddr *)&adresa, sizeof(adresa))<0)	chyba("Chyba pri vystavovani socketu:\n",-2);
 //Nastavenie socketu
     if(listen(sockFileDesc,2)<0)						chyba("Chyba pri nastavovani pocuvania socketu:\n",-3);
-//    vytvorZP(12345);
-//    pripojZP(&pdataArm);    //spoji zdielanu pamet so strukturou armData
-//defaultne hodnoty
-    
-//-------------------------
-//    sem_id = semCreate(12345,1);   //vytvor semafor
-//    semInit(sem_id,0,1);
+
+//vytvor zdielanu pamat
+	shmid = shmget(1112, sizeof(float), 0666 | IPC_CREAT);
+        if (shmid == -1){
+                perror("Problem s vytvorenim zdielanej pamate\n");
+                exit(1);
+        }
+//pripoj zdielanu pamet
+	teplota = shared_memory = shmat(shmid,NULL,0);
+/*        if (shared_memory == (void *)-1){
+                perror("Problem s pripojenim zdielanej pamate\n");
+                exit(2);
+        }*/
+	*teplota = 0;
+//Vytvorenie  semaforu
+    	if((sem_id = semget(1113, 1, 0666 | IPC_CREAT)) < 0) {
+        	printf("Chyba\n");
+        	exit(-2);
+    	}	
+	//Inicializacia semaforu
+	semun un;
+	un.val = 1;
+	semctl(sem_id, 0, SETVAL, un);
 //-------------------------
     printf("Server aktivny spusteny na porte %d\n",port);
     while(zap)
@@ -59,7 +93,6 @@ int main(int argc,char *argv[]){
 		case-1: chyba("Chyba pri vytvarani noveho procesu:\n",-104);break;
 		case 0: if (close(sockFileDesc)<0)	chyba("Chyba pri zatvarani socketu:\n",-5);
 			int por;
-			float teplota;
 			struct timeval timeout;
       
 			timeout.tv_sec = 10;
@@ -70,24 +103,49 @@ int main(int argc,char *argv[]){
 			signal(SIGINT, sigctrl1);
 			signal(SIGPIPE, sigpipe);
 			recv(client,&por, sizeof(por),0);
-			//pripojZP(&pdataArm);	//spoji zdielanu pamet so strukturou armData	
+			
+			//pripoj zdielanu pamet
+		        teplota = shmat(shmid,NULL,0);
+//			teplota = (float *)malloc(sizeof(float));
+/*   	     	     	if (shared_memory == (void *)-1){
+                		perror("Problem s pripojenim zdielanej pamate\n");
+                		exit(2);
+        		}
+        		*teplota = (float *)shared_memory;
+*/
 			printf("Pripojeny klient c:%d\n",por);			
 			switch(por){
-				case 1:	teplota = 100;
-					while(zap){//klient izba 1
-						send(client,&teplota, sizeof(teplota),0);
+				case 1://klient izba 1
+				case 2://klient izba 2
+				case 3://klient izba 3
+					while(zap){
+					//blokovanie semafor----------
+						my.sem_num = 1;
+        					my.sem_op = -1;	
+        					my.sem_flg = 0;
+        					semop(sem_id, &my, 1);
+					//----------------------------
+						send(client,&(*teplota), sizeof(*teplota),0);//odosli teplotu klientovi
+					//uvolni semafor--------------
+						my.sem_op = 1;
+        					semop(sem_id, &my, 1);
+					//----------------------------
 					}break;
-				case 2: teplota = 200;
-					while(zap){//klient izba 2
-						send(client,&teplota, sizeof(teplota),0);
-					}break;
-				case 3:	teplota = 300;
-					while(zap){//klient izba 3
-						send(client,&teplota, sizeof(teplota),0);
-					}break;
+				
 				case 4:	while(zap){// klient nastavovanie vonkajsej teploty
-						recv(client,&teplota, sizeof(teplota),0);
-						printf("teplota : %f\n",teplota);
+                                        //blokovanie semafor----------
+                                                my.sem_num = 1;
+                                                my.sem_op = -1;
+                                                my.sem_flg = 0;
+                                                semop(sem_id, &my, 1);
+                                        //----------------------------
+						recv(client,&(*teplota), sizeof(*teplota),0);
+						printf("teplota : %f\n",*teplota);
+                                       //uvolni semafor--------------
+                                                my.sem_op = 1;
+                                                semop(sem_id, &my, 1);
+                                        //----------------------------
+
 					}break;
 			}
 			if (close(client)<0)	chyba("Chyba pri zatvarani socketu:\n",-6);
@@ -103,9 +161,12 @@ void sigctrl(int param)
 {
   printf("Server sa vypina\n");
   printf("Vymazavam zdielanu pamet\n");
-//  uzavriZP();
+  if (shmctl(shmid, IPC_RMID, 0) == -1) {
+  	perror("Zmazanie zdielanej pamate zlyhalo\n");
+        exit(EXIT_FAILURE);
+  }
   printf("Vymazavam semafor\n");
-//  semRem(sem_id);
+  semctl(sem_id, 0, IPC_RMID, NULL);
   sleep(1);	
   if (close(sockFileDesc)<0)    chyba("Chyba pri zatvarani socketu:\n",-7);
   exit(0);
