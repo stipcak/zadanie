@@ -27,14 +27,21 @@ void chyba(const char *text,int cislo){
         perror(text);
         exit(cislo);
 }
+
+struct structTep{	
+float t1;
+float t2;
+float t3;
+float tout;
+};
+
 int *pocitadlo=0;
 int client;
 char zap = 1;
 int sem_id;
 int poc_klientov=0;
 int sockFileDesc;
-float *teplota;
-void *shared_memory;
+struct structTep *teplota;
 int shmid;
 struct sembuf my;
 int main(int argc,char *argv[]){
@@ -61,18 +68,22 @@ int main(int argc,char *argv[]){
     if(listen(sockFileDesc,2)<0)						chyba("Chyba pri nastavovani pocuvania socketu:\n",-3);
 
 //vytvor zdielanu pamat
-	shmid = shmget(1112, sizeof(float), 0666 | IPC_CREAT);
+	shmid = shmget(1112, sizeof(struct structTep), 0666 | IPC_CREAT);
         if (shmid == -1){
                 perror("Problem s vytvorenim zdielanej pamate\n");
                 exit(1);
         }
 //pripoj zdielanu pamet
-	teplota = shared_memory = shmat(shmid,NULL,0);
-/*        if (shared_memory == (void *)-1){
+	teplota = shmat(shmid,NULL,0);
+        if (teplota == (void *)-1){
                 perror("Problem s pripojenim zdielanej pamate\n");
                 exit(2);
-        }*/
-	*teplota = 0;
+        }
+	teplota->t1 = 20;
+	teplota->t2 = 20;
+	teplota->t3 = 20;
+	teplota->tout = 25;
+
 //Vytvorenie  semaforu
     	if((sem_id = semget(1113, 1, 0666 | IPC_CREAT)) < 0) {
         	printf("Chyba\n");
@@ -106,13 +117,11 @@ int main(int argc,char *argv[]){
 			
 			//pripoj zdielanu pamet
 		        teplota = shmat(shmid,NULL,0);
-//			teplota = (float *)malloc(sizeof(float));
-/*   	     	     	if (shared_memory == (void *)-1){
+   	     	     	if (teplota == (void *)-1){
                 		perror("Problem s pripojenim zdielanej pamate\n");
                 		exit(2);
         		}
-        		*teplota = (float *)shared_memory;
-*/
+        	
 			printf("Pripojeny klient c:%d\n",por);			
 			switch(por){
 				case 1://klient izba 1
@@ -140,7 +149,6 @@ int main(int argc,char *argv[]){
                                                 semop(sem_id, &my, 1);
                                         //----------------------------
 						recv(client,&(*teplota), sizeof(*teplota),0);
-						printf("teplota : %f\n",*teplota);
                                        //uvolni semafor--------------
                                                 my.sem_op = 1;
                                                 semop(sem_id, &my, 1);

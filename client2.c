@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <sys/ipc.h>
 #include <sys/sem.h> 
+#include <math.h>
 
 int sockFileDesc;
 struct sockaddr_in adresa;
@@ -28,7 +29,22 @@ typedef union{
 int sem_id;
 struct sembuf my;
 
-float teplota_vonku = 0;
+struct structTep{
+float t1;
+float t2;
+float t3;
+float tout;
+};
+
+struct structTep teplota = {20,20,20,25};
+float takt_last = 20;
+float takt;
+float tout_last=0;
+float trad = 0;
+float tnast_last=20;
+float t = 0;
+
+float ms = 200;//cas opakovania
 
 void* readSocket(void *arg){
 while(zap){
@@ -38,7 +54,15 @@ while(zap){
     	my.sem_flg = 0;
 	semop(sem_id, &my, 1);
 //--------------------------------
-	recv(sockFileDesc,&teplota_vonku, sizeof(teplota_vonku),0);
+	recv(sockFileDesc,&teplota, sizeof(teplota),0);
+	if(teplota.tout != tout_last || tnast_last != teplota.t1){
+                takt_last = takt;
+                t = 0;
+//		trad = 0;
+		tout_last = teplota.tout;
+		tnast_last = teplota.t1;
+		printf("zmena");
+        }
 //uvolni semafor------------------
     	my.sem_op = 1;
 	semop(sem_id, &my, 1);
@@ -82,7 +106,7 @@ int main(int argc,char *argv[]){
 	
 	//Vytvorenie  semaforu
 	int sem_id=0;
-    	if ((sem_id = semget("K1", 1, 0666 | IPC_CREAT)) < 0) {
+    	if((sem_id = semget(getpid(), 1, 0666 | IPC_CREAT)) < 0) {
         	printf("Chyba\n");
         	exit(-2);
     	}	
@@ -94,7 +118,6 @@ int main(int argc,char *argv[]){
 	//Vytvorenie vlakna pre primanie vonkajsej teploty
 	pthread_t vlakno;
         pthread_create(&vlakno,NULL,&readSocket,NULL);
-
 	while(zap){
 		//blokovanie semafor----------
 		my.sem_num = 1;
@@ -102,11 +125,21 @@ int main(int argc,char *argv[]){
         	my.sem_flg = 0;
         	semop(sem_id, &my, 1);
 		//----------------------------
-		printf("teplota vonku : %F\n",teplota_vonku);
+		takt = (teplota.tout+trad-takt_last)*(1-exp(-(10/9)*t))+takt_last; //vypocet aktualnej hodnoty
+		float e = teplota.t2-takt;//vypocet regulacnej odchylky
+		//trad - teplota radiatora
+		if (e > 0)			trad+=0.1;
+		else if (e < 0)			trad-=0.1;
+		//----------------------------
+		if(e < 0) 		printf("teplota izby 2(klima pustena) : %F\n",takt);
+		else if(e > 0)		printf("teplota izby 2(radiator pusteny) : %F\n",takt);
+		else			printf("teplota izby 2 : %F\n",takt);
+		t+=(ms/1000); // posuvanie casu
 		//uvolni semafor--------------
 		my.sem_op = 1;
         	semop(sem_id, &my, 1);
 		//----------------------------
+		usleep(ms*1000); //cas opakovania
 	}
 
 	//Uzatvorenie socketu
@@ -117,7 +150,7 @@ int main(int argc,char *argv[]){
 
 	return 0;
 }
-void sigpipe(int param){
+void sigpipe(int param){//pri strate spojena nastane
 	printf("Server bol neocakavane zruseny\n");
 	zap=0;
         if(close(sockFileDesc)<0){
@@ -128,7 +161,7 @@ void sigpipe(int param){
 	exit(0);
 
 }
-void sigend(int param){
+void sigend(int param){//pri stalceni ctrl+c
 	printf("Klient uspesne vypnuty\n");
         if(close(sockFileDesc)<0){
                 perror("Nepodarilo sa uzavriet socket");
