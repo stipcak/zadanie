@@ -131,7 +131,6 @@ int main(int argc,char *argv[]){
         printf("Klient c.%d pripojeny(%s,%d)\n",por,ip,port);
 	
 	//Vytvorenie  semaforu
-	int sem_id=0;
     	if((sem_id = semget(getpid(), 1, 0666 | IPC_CREAT)) < 0) {
         	printf("Chyba\n");
         	exit(-2);
@@ -182,6 +181,7 @@ int main(int argc,char *argv[]){
 void sigpipe(int param){
 	printf("Server bol neocakavane zruseny\n");
 	zap=0;
+	semctl(sem_id, 0, IPC_RMID, NULL);
         if(close(sockFileDesc)<0){
                 perror("Nepodarilo sa uzavriet socket");
                 exit(4);
@@ -192,6 +192,8 @@ void sigpipe(int param){
 }
 void sigend(int param){
 	printf("Klient uspesne vypnuty\n");
+	zap = 0;
+	semctl(sem_id, 0, IPC_RMID, NULL);
         if(close(sockFileDesc)<0){
                 perror("Nepodarilo sa uzavriet socket");
                 exit(4);
